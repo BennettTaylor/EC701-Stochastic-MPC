@@ -26,6 +26,8 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from scipy.optimize import linprog
 
+from data import load_dataset
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. SYSTEM PARAMETERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -34,11 +36,10 @@ P_bar    = 1000.0  # kW   (1 MW max discharge)
 P_und    = 1000.0  # kW   (1 MW max charge)
 rho      = 0.1     # kWh/kW
 dP_bar   = 500.0   # kW/h (0.5 MW/h ramp limit)
-pi_D     = 5.5     # $/kW/month  (paper: ~$137k DC / ~26,000 kW peak ≈ $5.3/kW/month)
 N        = 24      # rolling MPC horizon (hours)
 M        = 720     # billing period (hours)
 sigma    = M / N   # = 30  amortisation factor
-sim_time = 1000    # total simulation timesteps
+sim_time = 1000    # total simulation timesteps  (set None for full 8760h year)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. SYNTHETIC DATASET
@@ -97,8 +98,16 @@ def plot_timeseries(L, pi_e, pi_f, alpha, title="Synthetic Data"):
     plt.show()
 
 
-L_data, pie_data, pif_data, alpha_data = generate_data(sim_time)
-plot_timeseries(L_data, pie_data, pif_data, alpha_data)
+_ds = load_dataset(sim_time=sim_time)
+L_data, pie_data, pif_data, alpha_data = _ds.L, _ds.pi_e, _ds.pi_f, _ds.alpha
+pi_D   = _ds.pi_D        # $/kW/month, from data.py (ConEd tariff by default)
+sim_time = _ds.meta["T"]  # clamp to actual data length
+print("\nData sources:")
+for k, v in _ds.meta.items():
+    print(f"  {k:14s}: {v}")
+print()
+plot_timeseries(L_data, pie_data, pif_data, alpha_data,
+                title=f"NYISO 2023 + Campus Load (T={sim_time}h)")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. LP SOLVER FOR ONE MPC STEP
