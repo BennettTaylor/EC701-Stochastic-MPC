@@ -39,8 +39,7 @@ dP_bar   = 500.0   # kW/h (0.5 MW/h ramp limit)
 N        = 24      # rolling MPC horizon (hours)
 M        = 720     # billing period (hours)
 sigma    = M / N   # = 30  amortisation factor
-sim_time = 1000    # total simulation timesteps  (set None for full 8760h year)
-
+sim_time = 720    # total simulation timesteps, run for a month  720, 8760 for year
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. SYNTHETIC DATASET
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,21 +97,19 @@ def plot_timeseries(L, pi_e, pi_f, alpha, title="Synthetic Data"):
     plt.show()
 
 
-_ds = load_dataset(sim_time=sim_time)
-L_data, pie_data, pif_data, alpha_data = _ds.L, _ds.pi_e, _ds.pi_f, _ds.alpha
-pi_D   = _ds.pi_D        # $/kW/month, from data.py (ConEd tariff by default)
-sim_time = _ds.meta["T"]  # clamp to actual data length
-print("\nData sources:")
-for k, v in _ds.meta.items():
-    print(f"  {k:14s}: {v}")
-print()
-plot_timeseries(L_data, pie_data, pif_data, alpha_data,
-                title=f"NYISO 2023 + Campus Load (T={sim_time}h)")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. LP SOLVER FOR ONE MPC STEP
+# 3. LP SOLVER FOR ONE MPC STEP, deterministic MPC 
 # ─────────────────────────────────────────────────────────────────────────────
-
+"""
+t : current timestep 
+E0 : current battery state of charge 
+D_prev — peak demand seen so far this month
+L — load for next N timesteps, array [t : t+horizon]
+pie — electricity price, array [t : t+horizon]
+pif — FR capacity price, array [t : t+horizon]
+alpha — the full ISO FR dispatch signal array, sliced similarly
+"""
 def solve_one_step(t, E0, D_prev, L, pie, pif, alpha):
     """
     Solve the full-information MPC LP for horizon [t, t + horizon - 1].
@@ -280,6 +277,18 @@ def solve_one_step(t, E0, D_prev, L, pie, pif, alpha):
 # 4. SIMULATE
 # ─────────────────────────────────────────────────────────────────────────────
 
+# load data 
+_ds = load_dataset(sim_time=sim_time)
+L_data, pie_data, pif_data, alpha_data = _ds.L, _ds.pi_e, _ds.pi_f, _ds.alpha
+pi_D   = _ds.pi_D        # $/kW/month, from data.py (ConEd tariff by default)
+sim_time = _ds.meta["T"]  # clamp to actual data length
+print("\nData sources:")
+for k, v in _ds.meta.items():
+    print(f"  {k:14s}: {v}")
+print()
+plot_timeseries(L_data, pie_data, pif_data, alpha_data,
+                title=f"NYISO 2023 + Campus Load (T={sim_time}h)")
+
 # All arrays sized to sim_time (the full simulation length)
 E_sim  = np.zeros(sim_time + 1)
 P_sim  = np.zeros(sim_time)
@@ -420,7 +429,7 @@ fig.suptitle(
     color=TEXT, fontsize=11, y=0.99
 )
 
-out_plot = './mpc_results_N='+str(N)+'.png'
+out_plot = './figures/deterministic_results_N='+str(N)+'_sigma='+str(sigma)+'.png'
 plt.savefig(out_plot, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
 plt.close()
 print(f"\nPlot saved -> {out_plot}")
