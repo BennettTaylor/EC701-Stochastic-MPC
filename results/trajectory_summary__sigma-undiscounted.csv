@@ -1,0 +1,4 @@
+method,sigma_case,sigma,N,T,n_scen,wall_s,energy,fr_revenue,demand,net,peak_kW
+deterministic,undiscounted,1.0,24,720,0,3.14,-73.8,3417.58,304911.02,301419.64,15245.55
+stochastic,undiscounted,1.0,24,720,20,67.2,-51.55,894.33,300917.12,299971.25,15045.86
+perfect_info,undiscounted,1.0,24,720,0,7.16,-276.95,4470.44,289160.0,284412.62,14458.0

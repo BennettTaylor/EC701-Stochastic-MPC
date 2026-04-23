@@ -41,7 +41,8 @@ class PerfectInfoMPC(MPCController):
         self.pi_f_true  = pi_f_true
         self.alpha_true = alpha_true
 
-    def solve_step(self, t: int, E0: float, D_prev: float, P_prev: float) -> StepResult:
+ 
+    def solve_step(self, t: int, E0: float, D_prev: float, P_prev: float,F_prev: float | None = None) -> StepResult:
         h = min(self.N, self.T - t)
         L   = self.L_true    [t : t + h]
         pie = self.pi_e_true [t : t + h]
@@ -50,6 +51,6 @@ class PerfectInfoMPC(MPCController):
         P, F, status = solve_single_path_lp(
             horizon=h, E0=E0, D_prev=D_prev, P_prev=P_prev,
             L=L, pi_e=pie, pi_f=pif, alpha=a,
-            params=self.p, pi_D=self.pi_D, sigma=self.sigma, gamma=self.gamma,
+            params=self.p, pi_D=self.pi_D, sigma=self.sigma, gamma=self.gamma, A0=F_prev,
         )
         return StepResult(P=P, F=F, status=status)

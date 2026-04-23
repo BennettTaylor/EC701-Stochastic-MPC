@@ -61,12 +61,21 @@ class DeterministicMPC(MPCController):
         a_hat   = np.clip(a_hat,   -1.0, 1.0)
         return L_hat, pie_hat, pif_hat, a_hat
 
-    def solve_step(self, t: int, E0: float, D_prev: float, P_prev: float) -> StepResult:
+    
+    def solve_step(
+        self,
+        t: int,
+        E0: float,
+        D_prev: float,
+        P_prev: float,
+        F_prev: float | None = None,   # ← A_t in delay mode; None = no delay
+    ) -> StepResult:
         h = min(self.N, self.T - t)
         L, pie, pif, alpha = self._forecast(t, h)
         P, F, status = solve_single_path_lp(
             horizon=h, E0=E0, D_prev=D_prev, P_prev=P_prev,
             L=L, pi_e=pie, pi_f=pif, alpha=alpha,
             params=self.p, pi_D=self.pi_D, sigma=self.sigma, gamma=self.gamma,
+            A0=F_prev,   # ← None → no-delay LP; float → delay LP
         )
         return StepResult(P=P, F=F, status=status)
