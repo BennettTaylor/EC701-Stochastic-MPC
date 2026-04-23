@@ -11,16 +11,21 @@ Two experiments produce all the CSVs consumed by generate_figures.py:
 
   2. Fig-8 experiment  (paper Fig. 8 replication, det+stoch+perfect)
      For each σ ∈ {1, M/N}:
-       a. Run det once (point forecasts) on the real trace → fixed commitment.
-       b. Run stoch once on the real trace → fixed commitment.
-       c. Draw R joint realizations (L, π^e, π^f, α) from the fitted
+       a. Draw R joint realizations (L, π^e, π^f, α) from the fitted
           distributions.
-       d. For each realization ξ:
-            • Score the (fixed) det and stoch commitments on ξ.
-            • Run perfect-info MPC on ξ (different commitment per ξ)
-              and score it on ξ.
+       b. For each realization ξ, PLAY each RH-MPC policy against ξ as the
+          true environment — the controller re-solves every hour using its
+          own forecasts for the horizon ahead, but state propagates under ξ.
+          • deterministic MPC: plans on fitted means, acts under ξ.
+          • stochastic MPC:    plans on |Ξ̄|=S fresh scenarios, acts under ξ.
+          • perfect-info MPC:  plans on ξ itself (oracle), acts under ξ.
+       c. Score each policy's realized (P, F) trajectory on ξ.
      Output: results/fig8_costs.csv  (long format, one row per
      method × σ × realization).
+
+     This is Method B: per-realization MPC, which is what the paper's Fig. 8
+     depicts.  A faster --fig8-mode=fixed approximation (commit once on the
+     real trace, score on each ξ) is available for quick sanity runs.
 
 Usage
 -----
@@ -28,6 +33,7 @@ Usage
     python main.py --trajectory       # only the trajectory run
     python main.py --fig8             # only the Fig 8 experiment
     python main.py --fig8 --n-real 50 --n-scen 30 --fig8-horizon 168
+    python main.py --fig8 --fig8-mode fixed       # fast (commit once on real trace)
 """
 
 from __future__ import annotations
@@ -176,10 +182,11 @@ def run_fig8_experiment(
     ds, lw_load, lw_price, ln_pif, gn_alpha,
     T: int, N: int, pi_D: float, n_scen: int, n_real: int,
     sigma_cases: dict[str, float],
+    mode: str = "per-realization",
     seed_real_base: int = 10_000,
 ):
     print("\n" + "=" * 72)
-    print(f" FIG 8 experiment   T={T}h  N={N}h  |Ξ̄|={n_scen}  |Ξ|={n_real}")
+    print(f" FIG 8 experiment   T={T}h  N={N}h  |Ξ̄|={n_scen}  |Ξ|={n_real}  mode={mode}")
     print("=" * 72)
 
     # Pre-sample the evaluation realizations ONCE; reuse for all (σ, method) pairs.
@@ -199,29 +206,44 @@ def run_fig8_experiment(
 
         common = dict(horizon=N, T=T, pi_D=pi_D, sigma=sigma)
 
-        # ── Deterministic commitment (fixed across all realizations) ─────
-        t0 = time.time()
-        print("    running deterministic MPC on real trace ...", flush=True)
-        det = DeterministicMPC(lw_load, lw_price, ln_pif, gn_alpha, **common)
-        det_sim = det.simulate(ds.L, ds.pi_e, ds.pi_f, ds.alpha)
-        print(f"      done in {time.time()-t0:.1f}s, peak={det_sim.D_final:.0f} kW")
-
-        # ── Stochastic commitment (fixed across all realizations) ────────
-        t0 = time.time()
-        print(f"    running stochastic MPC on real trace (|Ξ̄|={n_scen}) ...", flush=True)
+        # In per-realization mode the same controllers are re-simulated with ξ
+        # as the environment each time (so their priors are fixed but their
+        # commitments differ per realization).  In fixed mode they solve once
+        # against the real trace and their commitments are reused.
+        det   = DeterministicMPC(lw_load, lw_price, ln_pif, gn_alpha, **common)
         stoch = StochasticMPC(lw_load, lw_price, ln_pif, gn_alpha,
                               n_scen=n_scen, **common)
-        stoch_sim = stoch.simulate(ds.L, ds.pi_e, ds.pi_f, ds.alpha)
-        print(f"      done in {time.time()-t0:.1f}s, peak={stoch_sim.D_final:.0f} kW, "
-              f"F mean={stoch_sim.F.mean():.0f} kW")
 
-        # ── Score det+stoch on each realization; run perfect per realization ─
-        print(f"    scoring + running perfect-info over {n_real} realizations ...", flush=True)
+        if mode == "fixed":
+            t0 = time.time()
+            print("    running deterministic MPC on real trace ...", flush=True)
+            det_fixed = det.simulate(ds.L, ds.pi_e, ds.pi_f, ds.alpha)
+            print(f"      done in {time.time()-t0:.1f}s, peak={det_fixed.D_final:.0f} kW")
+
+            t0 = time.time()
+            print(f"    running stochastic MPC on real trace (|Ξ̄|={n_scen}) ...", flush=True)
+            stoch_fixed = stoch.simulate(ds.L, ds.pi_e, ds.pi_f, ds.alpha)
+            print(f"      done in {time.time()-t0:.1f}s, peak={stoch_fixed.D_final:.0f} kW, "
+                  f"F mean={stoch_fixed.F.mean():.0f} kW")
+
+        print(f"    playing policies on {n_real} realizations ...", flush=True)
         t0 = time.time()
         for r, (L_xi, pie_xi, pif_xi, a_xi) in enumerate(realizations):
-            # Deterministic: fixed commitment, evaluated under ξ
+            if mode == "fixed":
+                # Reuse the single commitment from the real trace
+                det_P,  det_F  = det_fixed.P,  det_fixed.F
+                stoch_P, stoch_F = stoch_fixed.P, stoch_fixed.F
+            else:
+                # Re-simulate det and stoch with ξ as the environment
+                det_sim = det.simulate(L_xi, pie_xi, pif_xi, a_xi)
+                det_P, det_F = det_sim.P, det_sim.F
+
+                stoch_sim = stoch.simulate(L_xi, pie_xi, pif_xi, a_xi)
+                stoch_P, stoch_F = stoch_sim.P, stoch_sim.F
+
+            # Deterministic
             phi_det, det_info = cost_on_realization(
-                det_sim.P, det_sim.F, L_xi, pie_xi, pif_xi, a_xi, pi_D)
+                det_P, det_F, L_xi, pie_xi, pif_xi, a_xi, pi_D)
             out_rows.append(dict(
                 method="deterministic", sigma_case=case_name, sigma=sigma,
                 realization=r, phi=round(phi_det, 2),
@@ -231,9 +253,9 @@ def run_fig8_experiment(
                 peak_kW=round(det_info["peak"], 2),
             ))
 
-            # Stochastic: fixed commitment, evaluated under ξ
+            # Stochastic
             phi_stoch, stoch_info = cost_on_realization(
-                stoch_sim.P, stoch_sim.F, L_xi, pie_xi, pif_xi, a_xi, pi_D)
+                stoch_P, stoch_F, L_xi, pie_xi, pif_xi, a_xi, pi_D)
             out_rows.append(dict(
                 method="stochastic", sigma_case=case_name, sigma=sigma,
                 realization=r, phi=round(phi_stoch, 2),
@@ -243,7 +265,7 @@ def run_fig8_experiment(
                 peak_kW=round(stoch_info["peak"], 2),
             ))
 
-            # Perfect info: run MPC on ξ (different commitment per ξ)
+            # Perfect info: always per-realization (plans on ξ, acts on ξ)
             perf = PerfectInfoMPC(L_xi, pie_xi, pif_xi, a_xi, **common)
             perf_sim = perf.simulate(L_xi, pie_xi, pif_xi, a_xi)
             phi_perf, perf_info = cost_on_realization(
@@ -257,7 +279,7 @@ def run_fig8_experiment(
                 peak_kW=round(perf_info["peak"], 2),
             ))
 
-            if (r + 1) % 10 == 0 or r == n_real - 1:
+            if (r + 1) % 5 == 0 or r == n_real - 1:
                 dt = time.time() - t0
                 print(f"      [{r+1:3d}/{n_real}]  cum {dt:.0f}s  "
                       f"avg {dt/(r+1):.1f}s/realization")
@@ -297,6 +319,11 @@ def main():
                     help="MPC horizon for Fig 8 runs (default 168 = 7 days, per paper).")
     ap.add_argument("--n-real", type=int, default=30,
                     help="Number of evaluation realizations |Ξ| (default 30).")
+    ap.add_argument("--fig8-mode", choices=("per-realization", "fixed"),
+                    default="per-realization",
+                    help="per-realization: replan det/stoch against each ξ "
+                         "(faithful to paper). fixed: commit once on real "
+                         "trace, score on ξ (≈60× faster, approximate).")
     # Shared
     ap.add_argument("--T", type=int, default=720,
                     help="Simulation length in hours (default 720 = 1 month).")
@@ -342,6 +369,7 @@ def main():
             T=args.T, N=args.fig8_horizon, pi_D=pi_D,
             n_scen=args.n_scen, n_real=args.n_real,
             sigma_cases=sigma_cases,
+            mode=args.fig8_mode,
         )
 
 
